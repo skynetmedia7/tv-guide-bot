@@ -271,6 +271,12 @@ def main():
 
     print("TV Guide Bot is running...")
 
+    def main():
+    app = Application.builder().token(TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(button_handler))
+
     app.run_polling()
 
 
