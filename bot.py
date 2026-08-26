@@ -1,3 +1,4 @@
+
 import os
 import requests
 import xml.etree.ElementTree as ET
@@ -58,6 +59,7 @@ def load_epg():
             stop_dt = datetime.strptime(
                 stop[:19], "%Y%m%d%H%M%S"
             ).replace(tzinfo=TZ)
+
         except ValueError:
             continue
 
@@ -185,6 +187,7 @@ async def button_handler(
     context: ContextTypes.DEFAULT_TYPE
 ):
     query = update.callback_query
+
     await query.answer()
 
     data = query.data
@@ -270,12 +273,6 @@ def main():
     )
 
     print("TV Guide Bot is running...")
-
-    def main():
-    app = Application.builder().token(TOKEN).build()
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(button_handler))
 
     app.run_polling()
 
