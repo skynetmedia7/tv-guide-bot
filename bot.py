@@ -13,7 +13,7 @@ from telegram.ext import (
     ContextTypes,
 )
 
-TOKEN = os.environ["TOKEN"]
+TOKEN = os.environ["BOT_TOKEN"]
 
 EPG_URL = "https://iptv-org.github.io/epg/guides/en/sky.com.xml"
 
