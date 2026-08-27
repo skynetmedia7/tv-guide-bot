@@ -29,7 +29,7 @@ from telegram.ext import (
 TOKEN = os.environ.get("BOT_TOKEN")
 
 # Working Sky EPG mirror
-EPG_URL = "https://xmltv.tvkaista.net/guides/sky.com.xml"
+EPG_URL = "https://iptv-epg.org/files/epg-gb.xml"
 
 TZ = ZoneInfo("Europe/London")
 
