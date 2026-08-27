@@ -747,6 +747,36 @@ async def post_init(application):
 # ============================================================
 
 def main():
+    print("==========================================")
+    print("Starting TV Guide Bot...")
+    print("==========================================")
 
-    print("========================================")
-    print("
+    app = (
+        Application.builder()
+        .token(TOKEN)
+        .post_init(post_init)
+        .build()
+    )
+
+    app.add_handler(
+        CommandHandler("start", start)
+    )
+
+    app.add_handler(
+        CallbackQueryHandler(button_handler)
+    )
+
+    app.add_error_handler(error_handler)
+
+    print("TV Guide Bot is ready")
+    print("Starting Telegram polling...")
+
+    app.run_polling(
+        drop_pending_updates=True,
+        allowed_updates=Update.ALL_TYPES
+    )
+
+
+if __name__ == "__main__":
+    main()
+    
