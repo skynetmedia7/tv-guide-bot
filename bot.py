@@ -935,40 +935,41 @@ async def error_handler(
 # MAIN
 # ============================================================
 
+
+async def post_init(application):
+    print("Checking Telegram connection...")
+
+    me = await application.bot.get_me()
+
+    print(f"Connected to Telegram as @{me.username}")
+
+    await application.bot.delete_webhook(
+        drop_pending_updates=True
+    )
+
+    print("Telegram webhook cleared")
+    print("Starting polling...")
+
+
+# ============================================================
+# MAIN
+# ============================================================
+
 def main():
 
-    print(
-        "================================"
-    )
-
-    print(
-        "Starting TV Guide Bot..."
-    )
-
-    print(
-        "================================"
-    )
-
-    # --------------------------------------------------------
-    # Start Render web server
-    # --------------------------------------------------------
+    print("========================================")
+    print("Starting TV Guide Bot...")
+    print("========================================")
 
     start_web_server()
-
-    # --------------------------------------------------------
-    # Create Telegram application
-    # --------------------------------------------------------
 
     app = (
         Application
         .builder()
         .token(TOKEN)
+        .post_init(post_init)
         .build()
     )
-
-    # --------------------------------------------------------
-    # /start
-    # --------------------------------------------------------
 
     app.add_handler(
         CommandHandler(
@@ -977,34 +978,21 @@ def main():
         )
     )
 
-    # --------------------------------------------------------
-    # Buttons
-    # --------------------------------------------------------
-
     app.add_handler(
         CallbackQueryHandler(
             button_handler
         )
     )
 
-    # --------------------------------------------------------
-    # Error handler
-    # --------------------------------------------------------
-
     app.add_error_handler(
         error_handler
     )
 
-    print(
-        "TV Guide Bot is running..."
-    )
-
-    # --------------------------------------------------------
-    # Telegram polling
-    # --------------------------------------------------------
+    print("TV Guide Bot is ready")
 
     app.run_polling(
-        drop_pending_updates=True
+        drop_pending_updates=True,
+        allowed_updates=Update.ALL_TYPES
     )
 
 
@@ -1013,5 +1001,4 @@ def main():
 # ============================================================
 
 if __name__ == "__main__":
-
     main()
