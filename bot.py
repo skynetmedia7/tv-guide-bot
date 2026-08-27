@@ -3,17 +3,13 @@ import threading
 import requests
 import xml.etree.ElementTree as ET
 import html
+import re
 
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
-from telegram import (
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    Update,
-)
-
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -28,18 +24,13 @@ from telegram.ext import (
 
 TOKEN = os.environ.get("BOT_TOKEN")
 
-# Working Sky EPG mirror
+# UK EPG
 EPG_URL = "https://iptv-epg.org/files/epg-gb.xml"
 
 TZ = ZoneInfo("Europe/London")
 
-# Number of channels displayed on each Telegram page
-CHANNELS_PER_PAGE = 30
-
 CHANNELS = {}
 PROGRAMMES = {}
-
-CHANNEL_LIST = []
 
 
 # ============================================================
@@ -59,19 +50,10 @@ if not TOKEN:
 class HealthHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
-
         self.send_response(200)
-
-        self.send_header(
-            "Content-type",
-            "text/plain"
-        )
-
+        self.send_header("Content-type", "text/plain")
         self.end_headers()
-
-        self.wfile.write(
-            b"TV Guide Bot is running"
-        )
+        self.wfile.write(b"TV Guide Bot is running")
 
     def log_message(self, format, *args):
         return
@@ -79,24 +61,14 @@ class HealthHandler(BaseHTTPRequestHandler):
 
 def start_web_server():
 
-    port = int(
-        os.environ.get(
-            "PORT",
-            "10000"
-        )
-    )
+    port = int(os.environ.get("PORT", "10000"))
 
     server = ThreadingHTTPServer(
-        (
-            "0.0.0.0",
-            port
-        ),
+        ("0.0.0.0", port),
         HealthHandler
     )
 
-    print(
-        f"Web server listening on port {port}"
-    )
+    print(f"Web server listening on port {port}")
 
     thread = threading.Thread(
         target=server.serve_forever,
@@ -110,267 +82,189 @@ def start_web_server():
 # PARSE XMLTV DATE
 # ============================================================
 
-def parse_xmltv_datetime(value):
+def parse_xmltv_time(value):
 
     if not value:
         return None
 
-    value = value.strip()
-
     try:
+        value = value.strip()
 
-        # XMLTV format normally looks like:
-        #
-        # 20260827080000 +0100
-        #
-        # or:
-        #
-        # 20260827080000
+        # First 14 characters are:
+        # YYYYMMDDHHMMSS
+        base = datetime.strptime(
+            value[:14],
+            "%Y%m%d%H%M%S"
+        )
 
-        if len(value) >= 19:
+        # Look for timezone such as +0100 or -0500
+        match = re.search(r"([+-])(\d{2})(\d{2})", value[14:])
 
-            date_part = value[:14]
+        if match:
 
-            remaining = value[14:].strip()
+            sign = 1 if match.group(1) == "+" else -1
 
-            dt = datetime.strptime(
-                date_part,
-                "%Y%m%d%H%M%S"
+            hours = int(match.group(2))
+            minutes = int(match.group(3))
+
+            offset_seconds = sign * (
+                hours * 3600 +
+                minutes * 60
             )
 
-            if remaining:
-
-                # Handle +0100 / -0500
-                if (
-                    remaining.startswith("+")
-                    or remaining.startswith("-")
-                ):
-
-                    sign = (
-                        1
-                        if remaining[0] == "+"
-                        else -1
-                    )
-
-                    offset_text = remaining[1:5]
-
-                    hours = int(
-                        offset_text[:2]
-                    )
-
-                    minutes = int(
-                        offset_text[2:4]
-                    )
-
-                    offset_seconds = (
-                        sign
-                        * (
-                            hours * 3600
-                            + minutes * 60
-                        )
-                    )
-
-                    from datetime import timedelta
-
-                    dt = dt.replace(
-                        tzinfo=timezone(
-                            timedelta(
-                                seconds=offset_seconds
-                            )
-                        )
-                    )
-
-                    return dt.astimezone(TZ)
-
-            # If no offset was supplied,
-            # treat it as UTC.
-            dt = dt.replace(
-                tzinfo=timezone.utc
+            tz = timezone(
+                __import__("datetime").timedelta(
+                    seconds=offset_seconds
+                )
             )
 
-            return dt.astimezone(TZ)
+            return base.replace(tzinfo=tz).astimezone(TZ)
+
+        # No timezone supplied - assume UTC
+        return base.replace(
+            tzinfo=timezone.utc
+        ).astimezone(TZ)
 
     except Exception as e:
 
         print(
-            f"Date parse error: {value} - {e}"
+            f"Could not parse EPG time '{value}': {e}"
         )
 
-    return None
+        return None
 
 
 # ============================================================
-# LOAD EPG
+# LOAD EPG - MEMORY EFFICIENT
 # ============================================================
 
 def load_epg():
 
-    global CHANNELS
-    global PROGRAMMES
-    global CHANNEL_LIST
+    global CHANNELS, PROGRAMMES
 
     print("Loading TV guide...")
 
-    response = requests.get(
-        EPG_URL,
-        timeout=120,
-        headers={
-            "User-Agent": "TV-Guide-Bot/1.0"
-        }
-    )
-
-    response.raise_for_status()
-
-    print(
-        f"EPG downloaded: {len(response.content)} bytes"
-    )
-
-    root = ET.fromstring(
-        response.content
-    )
+    now = datetime.now(TZ)
 
     channels = {}
     programmes = {}
 
-    # ========================================================
-    # CHANNELS
-    # ========================================================
+    response = requests.get(
+        EPG_URL,
+        timeout=90,
+        stream=True
+    )
 
-    for channel in root.findall("channel"):
+    response.raise_for_status()
 
-        channel_id = channel.get("id")
+    print("EPG download started...")
 
-        if not channel_id:
-            continue
+    # --------------------------------------------------------
+    # STREAM XML INSTEAD OF LOADING EVERYTHING INTO MEMORY
+    # --------------------------------------------------------
 
-        display_names = channel.findall(
-            "display-name"
-        )
-
-        name = None
-
-        if display_names:
-
-            for element in display_names:
-
-                if element.text:
-
-                    name = element.text.strip()
-
-                    if name:
-                        break
-
-        if not name:
-            name = channel_id
-
-        channels[channel_id] = name
-
-    # ========================================================
-    # PROGRAMMES
-    # ========================================================
-
-    programme_count = 0
-
-    for programme in root.findall(
-        "programme"
+    for event, element in ET.iterparse(
+        response.raw,
+        events=("end",)
     ):
 
-        channel_id = programme.get(
-            "channel"
-        )
+        # ----------------------------------------------------
+        # CHANNEL
+        # ----------------------------------------------------
 
-        start = programme.get(
-            "start"
-        )
+        if element.tag == "channel":
 
-        stop = programme.get(
-            "stop"
-        )
+            channel_id = element.get("id")
 
-        if not channel_id:
-            continue
+            name_element = element.find("display-name")
 
-        if not start or not stop:
-            continue
+            if name_element is not None and name_element.text:
+                name = name_element.text.strip()
+            else:
+                name = channel_id
 
-        start_dt = parse_xmltv_datetime(
-            start
-        )
+            if channel_id and name:
 
-        stop_dt = parse_xmltv_datetime(
-            stop
-        )
+                channels[channel_id] = name
 
-        if not start_dt or not stop_dt:
-            continue
+            element.clear()
 
-        title_element = programme.find(
-            "title"
-        )
+        # ----------------------------------------------------
+        # PROGRAMME
+        # ----------------------------------------------------
 
-        if (
-            title_element is not None
-            and title_element.text
-        ):
+        elif element.tag == "programme":
 
-            title = title_element.text.strip()
+            channel_id = element.get("channel")
+            start_value = element.get("start")
+            stop_value = element.get("stop")
 
-        else:
+            if not channel_id or not start_value or not stop_value:
+                element.clear()
+                continue
 
-            title = "Programme"
+            # Ignore programmes for channels we don't know
+            if channel_id not in channels:
+                element.clear()
+                continue
 
-        programmes.setdefault(
-            channel_id,
-            []
-        ).append(
-            {
-                "title": title,
-                "start": start_dt,
-                "stop": stop_dt,
-            }
-        )
+            start_dt = parse_xmltv_time(start_value)
+            stop_dt = parse_xmltv_time(stop_value)
 
-        programme_count += 1
+            if start_dt is None or stop_dt is None:
+                element.clear()
+                continue
 
-    # ========================================================
-    # SORT PROGRAMMES
-    # ========================================================
+            # Ignore programmes that have already finished
+            if stop_dt < now:
+                element.clear()
+                continue
 
+            title_element = element.find("title")
+
+            if title_element is not None and title_element.text:
+                title = title_element.text.strip()
+            else:
+                title = "Programme"
+
+            # Keep only the next 12 programmes per channel
+            channel_list = programmes.setdefault(
+                channel_id,
+                []
+            )
+
+            if len(channel_list) < 12:
+
+                channel_list.append(
+                    {
+                        "title": title,
+                        "start": start_dt,
+                        "stop": stop_dt,
+                    }
+                )
+
+            element.clear()
+
+    response.close()
+
+    # Sort each channel's programmes
     for channel_id in programmes:
 
         programmes[channel_id].sort(
-            key=lambda item: item["start"]
+            key=lambda x: x["start"]
         )
-
-    # ========================================================
-    # SAVE DATA
-    # ========================================================
 
     CHANNELS = channels
     PROGRAMMES = programmes
 
-    # Only show channels which actually have
-    # programme information.
-    CHANNEL_LIST = sorted(
-        [
-            channel_id
-            for channel_id in CHANNELS
-            if channel_id in PROGRAMMES
-            and PROGRAMMES[channel_id]
-        ],
-        key=lambda channel_id:
-            CHANNELS[channel_id].lower()
+    total = sum(
+        len(x)
+        for x in PROGRAMMES.values()
     )
 
     print(
-        f"EPG loaded: "
-        f"{len(CHANNELS)} channels, "
-        f"{programme_count} programmes"
-    )
-
-    print(
-        f"Channels with programme data: "
-        f"{len(CHANNEL_LIST)}"
+        f"EPG loaded: {len(CHANNELS)} channels, "
+        f"{total} upcoming programmes"
     )
 
 
@@ -378,104 +272,25 @@ def load_epg():
 # CHANNEL KEYBOARD
 # ============================================================
 
-def channel_keyboard(page=0):
-
-    total_channels = len(
-        CHANNEL_LIST
-    )
-
-    total_pages = max(
-        1,
-        (
-            total_channels
-            + CHANNELS_PER_PAGE
-            - 1
-        )
-        // CHANNELS_PER_PAGE
-    )
-
-    # Keep page in range
-    page = max(
-        0,
-        min(
-            page,
-            total_pages - 1
-        )
-    )
-
-    start_index = (
-        page
-        * CHANNELS_PER_PAGE
-    )
-
-    end_index = (
-        start_index
-        + CHANNELS_PER_PAGE
-    )
-
-    page_channels = CHANNEL_LIST[
-        start_index:end_index
-    ]
+def channel_keyboard():
 
     buttons = []
 
-    for channel_id in page_channels:
+    sorted_channels = sorted(
+        CHANNELS.items(),
+        key=lambda x: x[1].lower()
+    )
 
-        # Use the channel's position in
-        # CHANNEL_LIST for a short callback.
-        channel_index = CHANNEL_LIST.index(
-            channel_id
-        )
-
-        name = CHANNELS.get(
-            channel_id,
-            channel_id
-        )
+    for channel_id, name in sorted_channels:
 
         buttons.append(
             [
                 InlineKeyboardButton(
                     name,
-                    callback_data=(
-                        f"channel:{channel_index}"
-                    )
+                    callback_data=f"channel:{channel_id}"
                 )
             ]
         )
-
-    # ========================================================
-    # PAGE NAVIGATION
-    # ========================================================
-
-    navigation = []
-
-    if page > 0:
-
-        navigation.append(
-            InlineKeyboardButton(
-                "⬅️ Previous",
-                callback_data=f"page:{page - 1}"
-            )
-        )
-
-    if page < total_pages - 1:
-
-        navigation.append(
-            InlineKeyboardButton(
-                "Next ➡️",
-                callback_data=f"page:{page + 1}"
-            )
-        )
-
-    if navigation:
-
-        buttons.append(
-            navigation
-        )
-
-    # ========================================================
-    # REFRESH
-    # ========================================================
 
     buttons.append(
         [
@@ -486,45 +301,14 @@ def channel_keyboard(page=0):
         ]
     )
 
-    return InlineKeyboardMarkup(
-        buttons
-    )
-
-
-# ============================================================
-# CHANNEL PAGE TEXT
-# ============================================================
-
-def channel_page_text(page=0):
-
-    total_channels = len(
-        CHANNEL_LIST
-    )
-
-    total_pages = max(
-        1,
-        (
-            total_channels
-            + CHANNELS_PER_PAGE
-            - 1
-        )
-        // CHANNELS_PER_PAGE
-    )
-
-    return (
-        "📺 <b>TV GUIDE</b>\n\n"
-        "☰ Choose a channel:\n\n"
-        f"Page {page + 1} of {total_pages}"
-    )
+    return InlineKeyboardMarkup(buttons)
 
 
 # ============================================================
 # GET CHANNEL PROGRAMMES
 # ============================================================
 
-def get_channel_programmes(
-    channel_id
-):
+def get_channel_programmes(channel_id):
 
     now = datetime.now(TZ)
 
@@ -537,16 +321,11 @@ def get_channel_programmes(
 
     for programme in programmes:
 
-        stop = programme["stop"]
+        if programme["stop"] >= now:
 
-        if stop >= now:
-
-            current.append(
-                programme
-            )
+            current.append(programme)
 
         if len(current) >= 12:
-
             break
 
     return current
@@ -556,9 +335,7 @@ def get_channel_programmes(
 # PROGRAMME TEXT
 # ============================================================
 
-def programme_text(
-    channel_id
-):
+def programme_text(channel_id):
 
     name = CHANNELS.get(
         channel_id,
@@ -569,9 +346,7 @@ def programme_text(
         channel_id
     )
 
-    safe_name = html.escape(
-        name
-    )
+    safe_name = html.escape(name)
 
     text = (
         f"📺 <b>{safe_name}</b>\n\n"
@@ -579,10 +354,7 @@ def programme_text(
 
     if not programmes:
 
-        text += (
-            "No programme information "
-            "available."
-        )
+        text += "No programme information available."
 
         return text
 
@@ -593,80 +365,25 @@ def programme_text(
         start = programme["start"]
         stop = programme["stop"]
 
-        start_text = start.strftime(
-            "%H:%M"
-        )
-
-        stop_text = stop.strftime(
-            "%H:%M"
-        )
+        start_text = start.strftime("%H:%M")
+        stop_text = stop.strftime("%H:%M")
 
         title = html.escape(
             programme["title"]
         )
 
         if start <= now < stop:
-
             marker = "▶️ "
-
         else:
-
             marker = ""
 
         text += (
             f"{marker}"
-            f"<b>{start_text} - "
-            f"{stop_text}</b> "
+            f"<b>{start_text} - {stop_text}</b> "
             f"{title}\n"
         )
 
     return text
-
-
-# ============================================================
-# CHANNEL BUTTON KEYBOARD
-# ============================================================
-
-def channel_view_keyboard(
-    channel_id
-):
-
-    # Find channel page so the user
-    # can return to the same page.
-    try:
-
-        index = CHANNEL_LIST.index(
-            channel_id
-        )
-
-        page = (
-            index
-            // CHANNELS_PER_PAGE
-        )
-
-    except ValueError:
-
-        page = 0
-
-    return InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton(
-                    "⬅️ Channels",
-                    callback_data=f"page:{page}"
-                ),
-                InlineKeyboardButton(
-                    "🔄 Refresh",
-                    callback_data="refresh_channel:"
-                    + str(
-                        CHANNEL_LIST.index(
-                            channel_id
-                        )
-                    )
-                )
-            ]
-        ]
-    )
 
 
 # ============================================================
@@ -678,14 +395,9 @@ async def start(
     context: ContextTypes.DEFAULT_TYPE
 ):
 
-    print(
-        "Received /start"
-    )
-
     try:
 
-        # Load guide if it has not
-        # already been loaded.
+        # Load EPG if it hasn't been loaded yet
         if not CHANNELS:
 
             load_epg()
@@ -696,30 +408,18 @@ async def start(
             f"EPG error: {e}"
         )
 
-        if update.message:
-
-            await update.message.reply_text(
-                "⚠️ <b>TV guide could not "
-                "be loaded.</b>\n\n"
-                "Please try again in a moment.",
-                parse_mode="HTML"
-            )
-
-        return
-
-    if not CHANNEL_LIST:
-
         await update.message.reply_text(
-            "⚠️ The TV guide loaded, "
-            "but no channels were found."
+            "⚠️ TV guide could not be loaded.\n\n"
+            "Please try again in a moment."
         )
 
         return
 
     await update.message.reply_text(
-        channel_page_text(0),
+        "📺 <b>TV GUIDE</b>\n\n"
+        "☰ Choose a channel:",
         parse_mode="HTML",
-        reply_markup=channel_keyboard(0)
+        reply_markup=channel_keyboard()
     )
 
 
@@ -738,38 +438,24 @@ async def button_handler(
 
     data = query.data
 
-    # ========================================================
-    # PAGE
-    # ========================================================
+    # --------------------------------------------------------
+    # HOME
+    # --------------------------------------------------------
 
-    if data.startswith("page:"):
-
-        try:
-
-            page = int(
-                data.split(
-                    ":",
-                    1
-                )[1]
-            )
-
-        except ValueError:
-
-            page = 0
+    if data == "home":
 
         await query.edit_message_text(
-            channel_page_text(page),
+            "📺 <b>TV GUIDE</b>\n\n"
+            "☰ Choose a channel:",
             parse_mode="HTML",
-            reply_markup=channel_keyboard(
-                page
-            )
+            reply_markup=channel_keyboard()
         )
 
         return
 
-    # ========================================================
+    # --------------------------------------------------------
     # REFRESH
-    # ========================================================
+    # --------------------------------------------------------
 
     if data == "refresh":
 
@@ -778,9 +464,10 @@ async def button_handler(
             load_epg()
 
             await query.edit_message_text(
-                channel_page_text(0),
+                "📺 <b>TV GUIDE</b>\n\n"
+                "☰ Choose a channel:",
                 parse_mode="HTML",
-                reply_markup=channel_keyboard(0)
+                reply_markup=channel_keyboard()
             )
 
         except Exception as e:
@@ -790,10 +477,8 @@ async def button_handler(
             )
 
             await query.edit_message_text(
-                "⚠️ <b>TV guide could not "
-                "be refreshed.</b>\n\n"
+                "⚠️ Something went wrong.\n\n"
                 "Please try again.",
-                parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup(
                     [
                         [
@@ -808,93 +493,22 @@ async def button_handler(
 
         return
 
-    # ========================================================
-    # REFRESH CHANNEL
-    # ========================================================
-
-    if data.startswith(
-        "refresh_channel:"
-    ):
-
-        try:
-
-            load_epg()
-
-            index = int(
-                data.split(
-                    ":",
-                    1
-                )[1]
-            )
-
-            channel_id = CHANNEL_LIST[
-                index
-            ]
-
-            text = programme_text(
-                channel_id
-            )
-
-            await query.edit_message_text(
-                text,
-                parse_mode="HTML",
-                reply_markup=channel_view_keyboard(
-                    channel_id
-                )
-            )
-
-        except Exception as e:
-
-            print(
-                f"Channel refresh error: {e}"
-            )
-
-            await query.edit_message_text(
-                "⚠️ Unable to refresh "
-                "the channel.",
-                reply_markup=InlineKeyboardMarkup(
-                    [
-                        [
-                            InlineKeyboardButton(
-                                "⬅️ Channels",
-                                callback_data="page:0"
-                            )
-                        ]
-                    ]
-                )
-            )
-
-        return
-
-    # ========================================================
+    # --------------------------------------------------------
     # CHANNEL
-    # ========================================================
+    # --------------------------------------------------------
 
-    if data.startswith(
-        "channel:"
-    ):
+    if data.startswith("channel:"):
 
-        try:
+        channel_id = data.split(
+            ":",
+            1
+        )[1]
 
-            channel_index = int(
-                data.split(
-                    ":",
-                    1
-                )[1]
-            )
-
-            channel_id = CHANNEL_LIST[
-                channel_index
-            ]
-
-        except (
-            ValueError,
-            IndexError
-        ):
+        if channel_id not in CHANNELS:
 
             await query.edit_message_text(
                 "⚠️ Channel not found.",
-                reply_markup=channel_keyboard(0)
+                reply_markup=channel_keyboard()
             )
 
             return
@@ -903,12 +517,25 @@ async def button_handler(
             channel_id
         )
 
+        keyboard = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "⬅️ Channels",
+                        callback_data="home"
+                    ),
+                    InlineKeyboardButton(
+                        "🔄 Refresh",
+                        callback_data="refresh"
+                    )
+                ]
+            ]
+        )
+
         await query.edit_message_text(
             text,
             parse_mode="HTML",
-            reply_markup=channel_view_keyboard(
-                channel_id
-            )
+            reply_markup=keyboard
         )
 
         return
@@ -923,32 +550,39 @@ async def error_handler(
     context: ContextTypes.DEFAULT_TYPE
 ):
 
-    error = context.error
-
     print(
         "Telegram error:",
-        error
+        context.error
     )
 
 
 # ============================================================
-# MAIN
+# POST INIT
 # ============================================================
 
-
 async def post_init(application):
-    print("Checking Telegram connection...")
+
+    print(
+        "Checking Telegram connection..."
+    )
 
     me = await application.bot.get_me()
 
-    print(f"Connected to Telegram as @{me.username}")
+    print(
+        f"Connected to Telegram as @{me.username}"
+    )
 
     await application.bot.delete_webhook(
         drop_pending_updates=True
     )
 
-    print("Telegram webhook cleared")
-    print("Starting polling...")
+    print(
+        "Telegram webhook cleared"
+    )
+
+    print(
+        "Starting polling..."
+    )
 
 
 # ============================================================
@@ -957,12 +591,22 @@ async def post_init(application):
 
 def main():
 
-    print("========================================")
-    print("Starting TV Guide Bot...")
-    print("========================================")
+    print(
+        "========================================"
+    )
 
+    print(
+        "Starting TV Guide Bot..."
+    )
+
+    print(
+        "========================================"
+    )
+
+    # Render web server
     start_web_server()
 
+    # Telegram application
     app = (
         Application
         .builder()
@@ -971,6 +615,7 @@ def main():
         .build()
     )
 
+    # /start
     app.add_handler(
         CommandHandler(
             "start",
@@ -978,18 +623,23 @@ def main():
         )
     )
 
+    # Buttons
     app.add_handler(
         CallbackQueryHandler(
             button_handler
         )
     )
 
+    # Errors
     app.add_error_handler(
         error_handler
     )
 
-    print("TV Guide Bot is ready")
+    print(
+        "TV Guide Bot is ready"
+    )
 
+    # Telegram polling
     app.run_polling(
         drop_pending_updates=True,
         allowed_updates=Update.ALL_TYPES
