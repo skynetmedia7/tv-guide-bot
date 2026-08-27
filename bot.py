@@ -2,8 +2,7 @@ import os
 import threading
 import requests
 import xml.etree.ElementTree as ET
-import html
-import re
+import tempfile
 
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
@@ -24,7 +23,6 @@ from telegram.ext import (
 
 TOKEN = os.environ.get("BOT_TOKEN")
 
-# UK EPG
 EPG_URL = "https://iptv-epg.org/files/epg-gb.xml"
 
 TZ = ZoneInfo("Europe/London")
@@ -34,7 +32,7 @@ PROGRAMMES = {}
 
 
 # ============================================================
-# CHECK TELEGRAM TOKEN
+# CHECK TOKEN
 # ============================================================
 
 if not TOKEN:
@@ -79,49 +77,61 @@ def start_web_server():
 
 
 # ============================================================
-# PARSE XMLTV DATE
+# PARSE EPG TIME
 # ============================================================
 
-def parse_xmltv_time(value):
+def parse_epg_time(value):
 
     if not value:
         return None
 
     try:
+
         value = value.strip()
 
-        # First 14 characters are:
-        # YYYYMMDDHHMMSS
-        base = datetime.strptime(
-            value[:14],
+        # Standard XMLTV format:
+        # 20260827230000 +0100
+
+        base = value[:14]
+
+        dt = datetime.strptime(
+            base,
             "%Y%m%d%H%M%S"
         )
 
-        # Look for timezone such as +0100 or -0500
-        match = re.search(r"([+-])(\d{2})(\d{2})", value[14:])
+        # Look for timezone offset
+        rest = value[14:].strip()
 
-        if match:
+        if rest:
 
-            sign = 1 if match.group(1) == "+" else -1
+            # +0100 / -0500
+            if len(rest) >= 5 and (
+                rest[0] in "+-"
+                and rest[1:5].isdigit()
+            ):
 
-            hours = int(match.group(2))
-            minutes = int(match.group(3))
+                sign = 1 if rest[0] == "+" else -1
 
-            offset_seconds = sign * (
-                hours * 3600 +
-                minutes * 60
-            )
+                hours = int(rest[1:3])
+                minutes = int(rest[3:5])
 
-            tz = timezone(
-                __import__("datetime").timedelta(
-                    seconds=offset_seconds
+                from datetime import timedelta, timezone as dt_timezone
+
+                offset = sign * (
+                    hours * 3600 +
+                    minutes * 60
                 )
-            )
 
-            return base.replace(tzinfo=tz).astimezone(TZ)
+                tz = dt_timezone(
+                    timedelta(seconds=offset)
+                )
+
+                return dt.replace(
+                    tzinfo=tz
+                ).astimezone(TZ)
 
         # No timezone supplied - assume UTC
-        return base.replace(
+        return dt.replace(
             tzinfo=timezone.utc
         ).astimezone(TZ)
 
@@ -142,100 +152,165 @@ def load_epg():
 
     global CHANNELS, PROGRAMMES
 
+    print("========================================")
     print("Loading TV guide...")
-
-    now = datetime.now(TZ)
+    print("EPG URL:", EPG_URL)
+    print("========================================")
 
     channels = {}
     programmes = {}
 
-    response = requests.get(
-        EPG_URL,
-        timeout=90,
-        stream=True
-    )
+    now = datetime.now(TZ)
 
-    response.raise_for_status()
+    # Keep approximately 24 hours of guide data
+    # instead of loading the entire EPG into memory.
 
-    print("EPG download started...")
+    future_limit = now.timestamp() + (24 * 60 * 60)
 
-    # --------------------------------------------------------
-    # STREAM XML INSTEAD OF LOADING EVERYTHING INTO MEMORY
-    # --------------------------------------------------------
+    temp_file = None
 
-    for event, element in ET.iterparse(
-        response.raw,
-        events=("end",)
-    ):
+    try:
 
         # ----------------------------------------------------
-        # CHANNEL
+        # DOWNLOAD TO DISK
         # ----------------------------------------------------
 
-        if element.tag == "channel":
+        print("Downloading EPG...")
 
-            channel_id = element.get("id")
+        response = requests.get(
+            EPG_URL,
+            timeout=120,
+            stream=True,
+            headers={
+                "User-Agent": "TV-Guide-Bot/1.0"
+            }
+        )
 
-            name_element = element.find("display-name")
+        response.raise_for_status()
 
-            if name_element is not None and name_element.text:
-                name = name_element.text.strip()
-            else:
-                name = channel_id
-
-            if channel_id and name:
-
-                channels[channel_id] = name
-
-            element.clear()
+        print(
+            "EPG download started. HTTP:",
+            response.status_code
+        )
 
         # ----------------------------------------------------
-        # PROGRAMME
+        # SAVE TEMPORARY FILE
         # ----------------------------------------------------
 
-        elif element.tag == "programme":
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            delete=False,
+            suffix=".xml"
+        ) as f:
 
-            channel_id = element.get("channel")
-            start_value = element.get("start")
-            stop_value = element.get("stop")
+            temp_file = f.name
 
-            if not channel_id or not start_value or not stop_value:
+            for chunk in response.iter_content(
+                chunk_size=1024 * 1024
+            ):
+
+                if chunk:
+                    f.write(chunk)
+
+        print("EPG downloaded successfully")
+
+        # ----------------------------------------------------
+        # STREAM XML FILE
+        # ----------------------------------------------------
+
+        print("Reading EPG...")
+
+        context = ET.iterparse(
+            temp_file,
+            events=("end",)
+        )
+
+        for event, element in context:
+
+            # ------------------------------------------------
+            # CHANNEL
+            # ------------------------------------------------
+
+            if element.tag == "channel":
+
+                channel_id = element.get("id")
+
+                name_element = element.find(
+                    "display-name"
+                )
+
+                if name_element is not None:
+                    name = name_element.text
+                else:
+                    name = channel_id
+
+                if channel_id and name:
+
+                    channels[channel_id] = (
+                        name.strip()
+                    )
+
                 element.clear()
-                continue
 
-            # Ignore programmes for channels we don't know
-            if channel_id not in channels:
-                element.clear()
-                continue
+            # ------------------------------------------------
+            # PROGRAMME
+            # ------------------------------------------------
 
-            start_dt = parse_xmltv_time(start_value)
-            stop_dt = parse_xmltv_time(stop_value)
+            elif element.tag == "programme":
 
-            if start_dt is None or stop_dt is None:
-                element.clear()
-                continue
+                channel_id = element.get("channel")
+                start = element.get("start")
+                stop = element.get("stop")
 
-            # Ignore programmes that have already finished
-            if stop_dt < now:
-                element.clear()
-                continue
+                if (
+                    not channel_id
+                    or not start
+                    or not stop
+                ):
+                    element.clear()
+                    continue
 
-            title_element = element.find("title")
+                start_dt = parse_epg_time(start)
+                stop_dt = parse_epg_time(stop)
 
-            if title_element is not None and title_element.text:
-                title = title_element.text.strip()
-            else:
-                title = "Programme"
+                if (
+                    start_dt is None
+                    or stop_dt is None
+                ):
+                    element.clear()
+                    continue
 
-            # Keep only the next 12 programmes per channel
-            channel_list = programmes.setdefault(
-                channel_id,
-                []
-            )
+                # Ignore programmes that have finished
+                if stop_dt < now:
 
-            if len(channel_list) < 12:
+                    element.clear()
+                    continue
 
-                channel_list.append(
+                # Ignore programmes more than 24 hours ahead
+                if start_dt.timestamp() > future_limit:
+
+                    element.clear()
+                    continue
+
+                title_element = element.find(
+                    "title"
+                )
+
+                if (
+                    title_element is not None
+                    and title_element.text
+                ):
+
+                    title = title_element.text.strip()
+
+                else:
+
+                    title = "Programme"
+
+                programmes.setdefault(
+                    channel_id,
+                    []
+                ).append(
                     {
                         "title": title,
                         "start": start_dt,
@@ -243,29 +318,54 @@ def load_epg():
                     }
                 )
 
-            element.clear()
+                element.clear()
 
-    response.close()
+        # ----------------------------------------------------
+        # SORT PROGRAMMES
+        # ----------------------------------------------------
 
-    # Sort each channel's programmes
-    for channel_id in programmes:
+        for channel_id in programmes:
 
-        programmes[channel_id].sort(
-            key=lambda x: x["start"]
+            programmes[channel_id].sort(
+                key=lambda x: x["start"]
+            )
+
+        CHANNELS = channels
+        PROGRAMMES = programmes
+
+        total_programmes = sum(
+            len(x)
+            for x in PROGRAMMES.values()
         )
 
-    CHANNELS = channels
-    PROGRAMMES = programmes
+        print("========================================")
+        print("EPG LOADED SUCCESSFULLY")
+        print("Channels:", len(CHANNELS))
+        print("Programmes:", total_programmes)
+        print("========================================")
 
-    total = sum(
-        len(x)
-        for x in PROGRAMMES.values()
-    )
+        return True
 
-    print(
-        f"EPG loaded: {len(CHANNELS)} channels, "
-        f"{total} upcoming programmes"
-    )
+    except Exception as e:
+
+        print("========================================")
+        print("EPG LOAD ERROR")
+        print("ERROR TYPE:", type(e).__name__)
+        print("ERROR:", str(e))
+        print("========================================")
+
+        raise
+
+    finally:
+
+        # Delete temporary XML file
+        if temp_file:
+
+            try:
+                os.remove(temp_file)
+
+            except Exception:
+                pass
 
 
 # ============================================================
@@ -321,7 +421,9 @@ def get_channel_programmes(channel_id):
 
     for programme in programmes:
 
-        if programme["stop"] >= now:
+        stop = programme["stop"]
+
+        if stop >= now:
 
             current.append(programme)
 
@@ -346,15 +448,16 @@ def programme_text(channel_id):
         channel_id
     )
 
-    safe_name = html.escape(name)
-
     text = (
-        f"📺 <b>{safe_name}</b>\n\n"
+        f"📺 <b>{name}</b>\n\n"
     )
 
     if not programmes:
 
-        text += "No programme information available."
+        text += (
+            "No programme information "
+            "available."
+        )
 
         return text
 
@@ -365,16 +468,22 @@ def programme_text(channel_id):
         start = programme["start"]
         stop = programme["stop"]
 
-        start_text = start.strftime("%H:%M")
-        stop_text = stop.strftime("%H:%M")
-
-        title = html.escape(
-            programme["title"]
+        start_text = start.strftime(
+            "%H:%M"
         )
 
+        stop_text = stop.strftime(
+            "%H:%M"
+        )
+
+        title = programme["title"]
+
         if start <= now < stop:
+
             marker = "▶️ "
+
         else:
+
             marker = ""
 
         text += (
@@ -395,260 +504,17 @@ async def start(
     context: ContextTypes.DEFAULT_TYPE
 ):
 
+    print("========================================")
+    print("Received /start")
+    print("========================================")
+
     try:
 
-        # Load EPG if it hasn't been loaded yet
         if not CHANNELS:
 
             load_epg()
 
     except Exception as e:
 
-        print(
-            f"EPG error: {e}"
-        )
-
-        await update.message.reply_text(
-            "⚠️ TV guide could not be loaded.\n\n"
-            "Please try again in a moment."
-        )
-
-        return
-
-    await update.message.reply_text(
-        "📺 <b>TV GUIDE</b>\n\n"
-        "☰ Choose a channel:",
-        parse_mode="HTML",
-        reply_markup=channel_keyboard()
-    )
-
-
-# ============================================================
-# BUTTON HANDLER
-# ============================================================
-
-async def button_handler(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
-
-    query = update.callback_query
-
-    await query.answer()
-
-    data = query.data
-
-    # --------------------------------------------------------
-    # HOME
-    # --------------------------------------------------------
-
-    if data == "home":
-
-        await query.edit_message_text(
-            "📺 <b>TV GUIDE</b>\n\n"
-            "☰ Choose a channel:",
-            parse_mode="HTML",
-            reply_markup=channel_keyboard()
-        )
-
-        return
-
-    # --------------------------------------------------------
-    # REFRESH
-    # --------------------------------------------------------
-
-    if data == "refresh":
-
-        try:
-
-            load_epg()
-
-            await query.edit_message_text(
-                "📺 <b>TV GUIDE</b>\n\n"
-                "☰ Choose a channel:",
-                parse_mode="HTML",
-                reply_markup=channel_keyboard()
-            )
-
-        except Exception as e:
-
-            print(
-                f"Refresh error: {e}"
-            )
-
-            await query.edit_message_text(
-                "⚠️ Something went wrong.\n\n"
-                "Please try again.",
-                reply_markup=InlineKeyboardMarkup(
-                    [
-                        [
-                            InlineKeyboardButton(
-                                "🔄 Try again",
-                                callback_data="refresh"
-                            )
-                        ]
-                    ]
-                )
-            )
-
-        return
-
-    # --------------------------------------------------------
-    # CHANNEL
-    # --------------------------------------------------------
-
-    if data.startswith("channel:"):
-
-        channel_id = data.split(
-            ":",
-            1
-        )[1]
-
-        if channel_id not in CHANNELS:
-
-            await query.edit_message_text(
-                "⚠️ Channel not found.",
-                reply_markup=channel_keyboard()
-            )
-
-            return
-
-        text = programme_text(
-            channel_id
-        )
-
-        keyboard = InlineKeyboardMarkup(
-            [
-                [
-                    InlineKeyboardButton(
-                        "⬅️ Channels",
-                        callback_data="home"
-                    ),
-                    InlineKeyboardButton(
-                        "🔄 Refresh",
-                        callback_data="refresh"
-                    )
-                ]
-            ]
-        )
-
-        await query.edit_message_text(
-            text,
-            parse_mode="HTML",
-            reply_markup=keyboard
-        )
-
-        return
-
-
-# ============================================================
-# ERROR HANDLER
-# ============================================================
-
-async def error_handler(
-    update: object,
-    context: ContextTypes.DEFAULT_TYPE
-):
-
-    print(
-        "Telegram error:",
-        context.error
-    )
-
-
-# ============================================================
-# POST INIT
-# ============================================================
-
-async def post_init(application):
-
-    print(
-        "Checking Telegram connection..."
-    )
-
-    me = await application.bot.get_me()
-
-    print(
-        f"Connected to Telegram as @{me.username}"
-    )
-
-    await application.bot.delete_webhook(
-        drop_pending_updates=True
-    )
-
-    print(
-        "Telegram webhook cleared"
-    )
-
-    print(
-        "Starting polling..."
-    )
-
-
-# ============================================================
-# MAIN
-# ============================================================
-
-def main():
-
-    print(
-        "========================================"
-    )
-
-    print(
-        "Starting TV Guide Bot..."
-    )
-
-    print(
-        "========================================"
-    )
-
-    # Render web server
-    start_web_server()
-
-    # Telegram application
-    app = (
-        Application
-        .builder()
-        .token(TOKEN)
-        .post_init(post_init)
-        .build()
-    )
-
-    # /start
-    app.add_handler(
-        CommandHandler(
-            "start",
-            start
-        )
-    )
-
-    # Buttons
-    app.add_handler(
-        CallbackQueryHandler(
-            button_handler
-        )
-    )
-
-    # Errors
-    app.add_error_handler(
-        error_handler
-    )
-
-    print(
-        "TV Guide Bot is ready"
-    )
-
-    # Telegram polling
-    app.run_polling(
-        drop_pending_updates=True,
-        allowed_updates=Update.ALL_TYPES
-    )
-
-
-# ============================================================
-# RUN
-# ============================================================
-
-if __name__ == "__main__":
-    main()
+        print("========================================")
+        print("
