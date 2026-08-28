@@ -771,20 +771,20 @@ async def button_handler(
             )
 
         return
-# CATEGORY
-if data.startswith("category:"):
-    category = data.split(":", 1)[1]
+    # CATEGORY
+    if data.startswith("category:"):
+        category = data.split(":", 1)[1]
 
-    keyboard = filtered_channel_keyboard(category)
+        keyboard = filtered_channel_keyboard(category)
 
-    await query.edit_message_text(
-        "📺 <b>TV GUIDE</b>\n\n"
-        "☰ Choose a channel:",
-        parse_mode="HTML",
-        reply_markup=keyboard
-    )
+        await query.edit_message_text(
+            "📺 <b>TV GUIDE</b>\n\n"
+            "☰ Choose a channel:",
+            parse_mode="HTML",
+            reply_markup=keyboard
+        )
 
-    return
+        return
     # --------------------------------------------------------
     # CHANNEL
     # --------------------------------------------------------
