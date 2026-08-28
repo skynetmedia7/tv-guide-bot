@@ -388,17 +388,136 @@ print("===== END CHANNELS =====")
 # CHANNEL KEYBOARD
 # ============================================================
 
-def channel_keyboard():
 
+# ============================================================
+# CHANNEL MENUS
+# ============================================================
+
+def channel_keyboard():
+    buttons = [
+        [
+            InlineKeyboardButton(
+                "⚽ Football",
+                callback_data="category:football"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "🛰️ Sky",
+                callback_data="category:sky"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "🎬 Movies",
+                callback_data="category:movies"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "📺 Entertainment",
+                callback_data="category:entertainment"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "📰 News",
+                callback_data="category:news"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "👨‍👩‍👧 Kids",
+                callback_data="category:kids"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "📡 All Channels",
+                callback_data="category:all"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "🔄 Refresh",
+                callback_data="refresh"
+            )
+        ]
+    ]
+
+    return InlineKeyboardMarkup(buttons)
+
+
+def filtered_channel_keyboard(category):
     buttons = []
 
-    sorted_channels = sorted(
-        CHANNELS.items(),
+    keywords = {
+        "football": [
+            "efl",
+            "football",
+            "sky sports football",
+            "tnt sports",
+            "premier sports",
+            "match"
+        ],
+        "sky": [
+            "sky"
+        ],
+        "movies": [
+            "sky cinema",
+            "movies",
+            "movie",
+            "film"
+        ],
+        "entertainment": [
+            "entertainment",
+            "showcase",
+            "comedy",
+            "witness",
+            "atlantic",
+            "max",
+            "arts",
+            "documentaries",
+            "crime",
+            "nature"
+        ],
+        "news": [
+            "news",
+            "bbc news",
+            "sky news",
+            "gb news"
+        ],
+        "kids": [
+            "kids",
+            "cbeebies",
+            "cb kids",
+            "cartoon",
+            "nick",
+            "nickelodeon",
+            "disney"
+        ]
+    }
+
+    if category == "all":
+        selected = list(CHANNELS.items())
+    else:
+        selected = []
+
+        for channel_id, name in CHANNELS.items():
+            name_lower = name.lower()
+
+            if any(
+                keyword in name_lower
+                for keyword in keywords.get(category, [])
+            ):
+                selected.append((channel_id, name))
+
+    selected = sorted(
+        selected,
         key=lambda item: item[1].lower()
     )
 
-    for channel_id, name in sorted_channels:
-
+    for channel_id, name in selected:
         buttons.append(
             [
                 InlineKeyboardButton(
@@ -411,6 +530,10 @@ def channel_keyboard():
     buttons.append(
         [
             InlineKeyboardButton(
+                "⬅️ Categories",
+                callback_data="home"
+            ),
+            InlineKeyboardButton(
                 "🔄 Refresh",
                 callback_data="refresh"
             )
@@ -418,7 +541,6 @@ def channel_keyboard():
     )
 
     return InlineKeyboardMarkup(buttons)
-
 
 # ============================================================
 # GET CHANNEL PROGRAMMES
