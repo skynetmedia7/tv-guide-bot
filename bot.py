@@ -747,9 +747,34 @@ async def post_init(application):
 # ============================================================
 
 def main():
-    print("==========================================")
+    import os
+    import threading
+    from http.server import HTTPServer, BaseHTTPRequestHandler
+
+    PORT = int(os.environ.get("PORT", 10000))
+
+    class HealthHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-type", "text/plain")
+            self.end_headers()
+            self.wfile.write(b"TV Guide Bot is running")
+
+        def log_message(self, format, *args):
+            pass
+
+    server = HTTPServer(("0.0.0.0", PORT), HealthHandler)
+
+    threading.Thread(
+        target=server.serve_forever,
+        daemon=True
+    ).start()
+
+    print(f"Web server listening on port {PORT}")
+
+    print("========================================")
     print("Starting TV Guide Bot...")
-    print("==========================================")
+    print("========================================")
 
     app = (
         Application.builder()
@@ -779,4 +804,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
     
