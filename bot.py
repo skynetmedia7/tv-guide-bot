@@ -380,7 +380,10 @@ def load_epg():
             except Exception:
                 pass
 
-
+print("===== CHANNELS FOUND =====")
+for channel_id, channel_name in sorted(CHANNELS.items(), key=lambda x: x[1].lower()):
+    print(channel_name)
+print("===== END CHANNELS =====")
 # ============================================================
 # CHANNEL KEYBOARD
 # ============================================================
