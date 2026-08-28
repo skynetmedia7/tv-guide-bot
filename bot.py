@@ -573,7 +573,6 @@ def get_channel_programmes(channel_id):
 # ============================================================
 # PROGRAMME TEXT
 # ============================================================
-
 def programme_text(channel_id):
 
     name = CHANNELS.get(
@@ -585,7 +584,6 @@ def programme_text(channel_id):
         channel_id
     )
 
-    # Escape text for Telegram HTML
     safe_name = html.escape(name)
 
     text = (
@@ -593,27 +591,23 @@ def programme_text(channel_id):
     )
 
     if not programmes:
-
         text += (
             "No programme information available."
         )
-
         return text
 
     now = datetime.now(TZ)
+
+    current_found = False
+    next_found = False
 
     for programme in programmes:
 
         start = programme["start"]
         stop = programme["stop"]
 
-        start_text = start.strftime(
-            "%H:%M"
-        )
-
-        stop_text = stop.strftime(
-            "%H:%M"
-        )
+        start_text = start.strftime("%H:%M")
+        stop_text = stop.strftime("%H:%M")
 
         title = html.escape(
             programme["title"]
@@ -621,7 +615,15 @@ def programme_text(channel_id):
 
         if start <= now < stop:
 
-            marker = "▶️ "
+            marker = "🔴 <b>NOW</b> "
+
+            current_found = True
+
+        elif start > now and not next_found:
+
+            marker = "▶️ <b>NEXT</b> "
+
+            next_found = True
 
         else:
 
@@ -634,6 +636,7 @@ def programme_text(channel_id):
         )
 
     return text
+
 
 
 # ============================================================
