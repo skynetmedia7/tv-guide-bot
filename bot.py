@@ -753,7 +753,7 @@ async def button_handler(
     # REFRESH
     # --------------------------------------------------------
 
-    if data == "refresh":
+        if data == "refresh":
 
         try:
             load_epg()
@@ -765,7 +765,7 @@ async def button_handler(
                 reply_markup=channel_keyboard()
             )
 
-         except Exception as e:
+        except Exception as e:
             if "Message is not modified" in str(e):
                 return
 
