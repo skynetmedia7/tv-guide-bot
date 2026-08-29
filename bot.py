@@ -753,27 +753,26 @@ async def button_handler(
     # REFRESH
     # --------------------------------------------------------
 
-        if data == "refresh":
-
-        try:
+           if data == "refresh":
+           try:
             load_epg()
 
-            await query.edit_message_text(
+           await query.edit_message_text(
                 "📺 <b>TV GUIDE</b>\n\n"
                 "☰ Choose a channel:",
                 parse_mode="HTML",
                 reply_markup=channel_keyboard()
             )
 
-        except Exception as e:
+            except Exception as e:
             if "Message is not modified" in str(e):
                 return
 
-            print("========================================")
-            print("REFRESH EPG ERROR")
-            print("ERROR TYPE:", type(e).__name__)
-            print("ERROR:", str(e))
-            print("========================================")
+                print("========================================")
+                print("REFRESH EPG ERROR")
+                print("ERROR TYPE:", type(e).__name__)
+                print("ERROR:", str(e))
+                print("========================================")
             await query.edit_message_text(
                 "⚠️ <b>TV GUIDE ERROR</b>\n\n"
                 f"{html.escape(type(e).__name__)}: "
