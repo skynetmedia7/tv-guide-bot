@@ -432,6 +432,12 @@ def channel_keyboard():
             )
         ],
         [
+    InlineKeyboardButton(
+        "🇬🇧 UK TV",
+        callback_data="category:uk tv"
+    )
+],
+        [
             InlineKeyboardButton(
                 "📡 All Channels",
                 callback_data="category:all"
@@ -496,6 +502,32 @@ def filtered_channel_keyboard(category):
             "nickelodeon",
             "disney"
         ]
+            ],
+
+    "uk tv": [
+        "bbc one",
+        "bbc two",
+        "bbc three",
+        "bbc four",
+        "itv1",
+        "itv2",
+        "itv3",
+        "itv4",
+        "channel 4",
+        "e4",
+        "more4",
+        "film4",
+        "channel 5",
+        "5star",
+        "5usa",
+        "5action",
+        "5select",
+        "quest",
+        "dave",
+        "drama",
+        "really",
+        "yesterday"
+    ]
     }
 
     if category == "all":
