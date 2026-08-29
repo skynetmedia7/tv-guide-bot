@@ -501,10 +501,8 @@ def filtered_channel_keyboard(category):
             "nick",
             "nickelodeon",
             "disney"
-        ]
-            ],
-
-    "uk tv": [
+        ],
+        "uk tv": [
         "bbc one",
         "bbc two",
         "bbc three",
