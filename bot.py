@@ -766,7 +766,9 @@ async def button_handler(
             )
 
         except Exception as e:
-
+            
+               if "Message is not modified" in str(e):
+                   return
             print("========================================")
             print("REFRESH EPG ERROR")
             print(
