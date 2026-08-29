@@ -765,22 +765,15 @@ async def button_handler(
                 reply_markup=channel_keyboard()
             )
 
-        except Exception as e:
-            
-               if "Message is not modified" in str(e):
-                   return
+         except Exception as e:
+            if "Message is not modified" in str(e):
+                return
+
             print("========================================")
             print("REFRESH EPG ERROR")
-            print(
-                "ERROR TYPE:",
-                type(e).__name__
-            )
-            print(
-                "ERROR:",
-                str(e)
-            )
+            print("ERROR TYPE:", type(e).__name__)
+            print("ERROR:", str(e))
             print("========================================")
-
             await query.edit_message_text(
                 "⚠️ <b>TV GUIDE ERROR</b>\n\n"
                 f"{html.escape(type(e).__name__)}: "
