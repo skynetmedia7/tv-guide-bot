@@ -727,7 +727,6 @@ async def button_handler(
 
         try:
 
-            load_epg()
 
             await query.edit_message_text(
                 "📺 <b>TV GUIDE</b>\n\n"
