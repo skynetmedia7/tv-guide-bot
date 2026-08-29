@@ -753,7 +753,7 @@ async def button_handler(
     # REFRESH
     # --------------------------------------------------------
 
-           if data == "refresh":
+    if data == "refresh":
            try:
             load_epg()
 
