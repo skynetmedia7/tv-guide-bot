@@ -726,7 +726,7 @@ async def button_handler(
     if data == "refresh":
 
         try:
-
+            load epg()
 
             await query.edit_message_text(
                 "📺 <b>TV GUIDE</b>\n\n"
